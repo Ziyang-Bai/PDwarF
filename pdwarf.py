@@ -1,47 +1,65 @@
-import pikepdf
-from PIL import Image
+import os
 import io
+from PIL import Image
+import PyPDF2
+import img2pdf
 
-def compress_pdf(input_path, output_path, compression_level=3):
-    """
-    压缩PDF文件。
+def extract_images_from_pdf(pdf_path):
+    images = []
+    with open(pdf_path, 'rb') as file:
+        reader = PyPDF2.PdfReader(file)
+        for page_num, page in enumerate(reader.pages):
+            resources = page.get("/Resources", None)
+            if resources is not None:
+                resources = resources.get_object()
+                if "/XObject" in resources:
+                    xobjects = resources["/XObject"]
+                    for obj in xobjects.values():
+                        if isinstance(obj, PyPDF2.generic.IndirectObject):
+                            obj = obj.get_object()
+                        if "/Subtype" in obj and obj["/Subtype"] == "/Image":
+                            try:
+                                # 获取图像数据
+                                stream = obj._data
+                                # 检查流是否为空
+                                if stream:
+                                    # 尝试打开图像
+                                    image = Image.open(io.BytesIO(stream))
+                                    images.append(image)
+                                    print(f"Found and processed image on page {page_num}")
+                                else:
+                                    print(f"Empty stream on page {page_num}")
+                            except Exception as e:
+                                print(f"Error processing image on page {page_num}: {e}")
+    return images
+
+def compress_images(images, quality_level):
+    compressed_images = []
+    for image in images:
+        output = io.BytesIO()
+        image.save(output, format="JPEG", optimize=True, quality=quality_level)
+        compressed_images.append(output.getvalue())
+    return compressed_images
+
+def create_compressed_pdf(input_pdf, output_pdf, quality_level):
+    images = extract_images_from_pdf(input_pdf)
+    if not images:
+        print("No valid images found in the PDF.")
+        return
     
-    :param input_path: 输入PDF文件路径
-    :param output_path: 输出PDF文件路径
-    :param compression_level: 压缩级别，0-最低压缩，4-最高压缩
-    """
-    # 打开原始PDF文件
-    with pikepdf.open(input_path) as pdf:
-        new_pdf = pikepdf.Pdf.new()
+    compressed_images = compress_images(images, quality_level)
+    
+    with open(output_pdf, "wb") as f:
+        f.write(img2pdf.convert(compressed_images))
+    print(f"Compressed PDF has been saved to {output_pdf}")
 
-        for page in pdf.pages:
-            resources = page.Resources
-            xobjects = resources.XObject
-            new_xobjects = pikepdf.Dictionary()
-            
-            for name, xobj in xobjects.items():
-                if xobj.Type == '/XObject' and xobj.Subtype == '/Image':
-                    # 读取图像数据
-                    img_data = xobj.stream.get_data()
-                    image = Image.open(io.BytesIO(img_data))
-                    
-                    # 根据压缩级别调整图像质量
-                    quality = 95 - (compression_level * 10)
-                    new_img_data = io.BytesIO()
-                    image.save(new_img_data, format='JPEG', quality=quality)
-                    
-                    # 创建一个新的流对象，并设置压缩后的图像数据
-                    stream = pikepdf.Stream(new_pdf, new_img_data.getvalue())
-                    new_xobjects[name] = xobj.copy_with_new_stream(stream)
-                else:
-                    new_xobjects[name] = xobj
-                    
-            resources.XObject = new_xobjects
-            new_page = pikepdf.Page(pdf, page_index=page.Index)
-            new_pdf.pages.append(new_page)
+if __name__ == "__main__":
+    input_pdf = "input.pdf"
+    output_pdf = "output.pdf"
+    quality_levels = [25, 50, 75, 90, 95]  # 压缩等级
+    quality_level = quality_levels[2]  # 选择第三个等级
 
-        # 写入新PDF文件
-        new_pdf.save(output_path)
-
-# 使用示例
-compress_pdf('input.pdf', 'output.pdf', compression_level=3)
+    if not os.path.exists(input_pdf):
+        print(f"The input PDF '{input_pdf}' does not exist.")
+    else:
+        create_compressed_pdf(input_pdf, output_pdf, quality_level)
